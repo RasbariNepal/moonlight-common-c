@@ -16,6 +16,8 @@
 // RTP packets use a 90 KHz presentation timestamp clock
 #define PTS_DIVISOR 90
 
+#include "StreamStats.h"
+
 void RtpvInitializeQueue(PRTP_VIDEO_QUEUE queue) {
     reed_solomon_init();
     memset(queue, 0, sizeof(*queue));
@@ -105,6 +107,13 @@ static void reportFinalFrameFecStatus(PRTP_VIDEO_QUEUE queue) {
     fecStatus.multiFecBlockCount = (uint8_t)(queue->multiFecLastBlockNumber + 1);
 
     connectionSendFrameFecStatus(&fecStatus);
+
+    // Feed per-frame signals into the stat accumulator
+    streamStatsRecordFrame(queue->bufferFirstRecvTimeUs,
+                           queue->bufferFirstRecvPtsUs,
+                           queue->bufferDataPackets,
+                           queue->bufferParityPackets,
+                           queue->missingPackets);
 }
 
 // newEntry is contained within the packet buffer so we free the whole entry by freeing entry->packet
@@ -692,6 +701,7 @@ int RtpvAddPacket(PRTP_VIDEO_QUEUE queue, PRTP_PACKET packet, int length, PRTPV_
         connectionSawFrame(queue->currentFrameNumber);
 
         queue->bufferFirstRecvTimeUs = PltGetMicroseconds();
+        queue->bufferFirstRecvPtsUs  = ((uint64_t)packet->timestamp * 1000) / PTS_DIVISOR;
         queue->bufferLowestSequenceNumber = U16(packet->sequenceNumber - fecIndex);
         queue->nextContiguousSequenceNumber = queue->bufferLowestSequenceNumber;
         queue->receivedDataPackets = 0;

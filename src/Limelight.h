@@ -895,6 +895,13 @@ typedef struct _RTP_VIDEO_STATS {
 
 const RTP_VIDEO_STATS* LiGetRTPVideoStats(void);
 
+// Returns a snapshot of the latest computed stream stats into the caller-supplied pointers.
+// Any pointer may be NULL if that metric is not needed.
+// Returns false if no snapshot is available yet (too early in the session).
+bool LiGetStreamStats(uint32_t* rttMs, uint32_t* rttVarianceMs,
+                      uint32_t* jitterUs, uint32_t* bandwidthKbps,
+                      uint16_t* pktLossPermille, uint16_t* frameLossPermille);
+
 // Port index flags for use with LiGetPortFromPortFlagIndex() and LiGetProtocolFromPortFlagIndex()
 #define ML_PORT_INDEX_TCP_47984 0
 #define ML_PORT_INDEX_TCP_47989 1

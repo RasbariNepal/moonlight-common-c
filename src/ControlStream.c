@@ -1,4 +1,5 @@
 #include "Limelight-internal.h"
+#include "StreamStats.h"
 
 // This is a private header, but it just contains some time macros
 #include <enet/time.h>
@@ -297,9 +298,13 @@ static bool supportsIdrFrameRequest;
 #define LOSS_REPORT_INTERVAL_MS 50
 #define PERIODIC_PING_INTERVAL_MS 100
 
+// How often (ms) the extended IDX_LOSS_STATS packet is sent to Sunshine (~2 frames at 60 fps).
+#define SS_LOSS_STATS_INTERVAL_MS 33
+
 // Initializes the control stream
 int initializeControlStream(void) {
     stopping = false;
+    streamStatsInitialize();
     PltCreateEvent(&idrFrameRequiredEvent);
     LbqInitializeLinkedBlockingQueue(&referenceFrameControlQueue, 20);
     LbqInitializeLinkedBlockingQueue(&frameFecStatusQueue, 8); // Limits number of frame status reports per periodic ping interval
@@ -373,6 +378,7 @@ static void freeBasicLbqList(PLINKED_BLOCKING_QUEUE_ENTRY entry) {
 // Cleans up control stream
 void destroyControlStream(void) {
     LC_ASSERT(stopping);
+    streamStatsCleanup();
     PltDestroyCryptoContext(encryptionCtx);
     PltDestroyCryptoContext(decryptionCtx);
     PltCloseEvent(&idrFrameRequiredEvent);
@@ -503,6 +509,10 @@ void connectionSawFrame(uint32_t frameIndex) {
             }
 
             lastIntervalLossPercentage = frameLossPercent;
+
+            // Forward to stat accumulator (permille = percent * 10, clamped to [0, 1000])
+            int lossPml = frameLossPercent * 10;
+            streamStatsUpdateFrameLoss((uint16_t)(lossPml > 1000 ? 1000 : lossPml));
         }
 
         // Reset interval
@@ -1419,6 +1429,56 @@ static void lossStatsThreadFunc(void* context) {
 
                     free(queuedFrameStatus);
                 }
+
+                // Send extended loss stats to Sunshine (68-byte IDX_LOSS_STATS).
+                // Bytes 0–31 are byte-for-byte identical to the legacy format so existing
+                // parsers reading stats[0], stats[1], stats[3] are unaffected.
+                // The new fields in bytes 32–67 carry the full stream stat snapshot.
+                {
+                    char lossStatsPayload[68];
+                    BYTE_BUFFER lsBuf;
+
+                    uint32_t rttMs = 0, rttVarianceMs = 0;
+                    LiGetEstimatedRttInfo(&rttMs, &rttVarianceMs);
+
+                    streamStatsComputeInterval(rttMs, rttVarianceMs, SS_LOSS_STATS_INTERVAL_MS);
+
+                    STREAM_STAT_SNAPSHOT snap = {0};
+                    streamStatsGetSnapshot(&snap);
+
+                    BbInitializeWrappedBuffer(&lsBuf, lossStatsPayload, 0, sizeof(lossStatsPayload), BYTE_ORDER_LITTLE);
+
+                    // ---- Legacy fields: bytes 0–31 ----
+                    BbPut32(&lsBuf, 0);                          // stats[0]  loss_count (reserved)
+                    BbPut32(&lsBuf, SS_LOSS_STATS_INTERVAL_MS);  // stats[1]  report_interval_ms
+                    BbPut32(&lsBuf, 1000);                       // stats[2]  reserved
+                    BbPut64(&lsBuf, lastGoodFrame);              // stats[3,4] last_good_frame
+                    BbPut32(&lsBuf, 0);                          // stats[5]  reserved
+                    BbPut32(&lsBuf, 0);                          // stats[6]  reserved
+                    BbPut32(&lsBuf, 0x14);                       // stats[7]  magic
+
+                    // ---- Extended fields: bytes 32–67 ----
+                    BbPut32(&lsBuf, snap.rttMs);                 // stats[8]
+                    BbPut32(&lsBuf, snap.rttVarianceMs);         // stats[9]
+                    BbPut32(&lsBuf, snap.bandwidthKbps);         // stats[10]
+                    BbPut32(&lsBuf, snap.jitterUs);              // stats[11]
+                    BbPut32(&lsBuf, snap.pktLossPermille);       // stats[12]
+                    BbPut32(&lsBuf, snap.frameLossPermille);     // stats[13]
+                    BbPut32(&lsBuf, snap.intervalFrames);        // stats[14]
+                    BbPut32(&lsBuf, snap.intervalDataPkts);      // stats[15]
+                    BbPut32(&lsBuf, snap.intervalLostPkts);      // stats[16]
+
+                    if (!sendMessageAndForget(packetTypes[IDX_LOSS_STATS],
+                                              sizeof(lossStatsPayload),
+                                              lossStatsPayload,
+                                              CTRL_CHANNEL_GENERIC,
+                                              0,
+                                              false)) {
+                        Limelog("Loss Stats: Transaction failed: %d\n", (int)LastSocketError());
+                        ListenerCallbacks.connectionTerminated(LastSocketFail());
+                        return;
+                    }
+                }
             }
 
             // Send the message (and don't expect a response)
@@ -1438,8 +1498,7 @@ static void lossStatsThreadFunc(void* context) {
                 return;
             }
 
-            // Wait a bit
-            PltSleepMsInterruptible(&lossStatsThread, PERIODIC_PING_INTERVAL_MS);
+            PltSleepMsInterruptible(&lossStatsThread, SS_LOSS_STATS_INTERVAL_MS);
         }
     }
     else {
@@ -1744,6 +1803,22 @@ bool LiGetEstimatedRttInfo(uint32_t* estimatedRtt, uint32_t* estimatedRttVarianc
     }
 
     return ret;
+}
+
+bool LiGetStreamStats(uint32_t* rttMs, uint32_t* rttVarianceMs,
+                      uint32_t* jitterUs, uint32_t* bandwidthKbps,
+                      uint16_t* pktLossPermille, uint16_t* frameLossPermille) {
+    STREAM_STAT_SNAPSHOT snap;
+    if (!streamStatsGetSnapshot(&snap)) {
+        return false;
+    }
+    if (rttMs)             *rttMs             = snap.rttMs;
+    if (rttVarianceMs)     *rttVarianceMs     = snap.rttVarianceMs;
+    if (jitterUs)          *jitterUs          = snap.jitterUs;
+    if (bandwidthKbps)     *bandwidthKbps     = snap.bandwidthKbps;
+    if (pktLossPermille)   *pktLossPermille   = snap.pktLossPermille;
+    if (frameLossPermille) *frameLossPermille = snap.frameLossPermille;
+    return true;
 }
 
 // Starts the control stream

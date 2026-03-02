@@ -84,6 +84,19 @@ typedef struct _QUEUED_ASYNC_CALLBACK {
             uint8_t left[DS_EFFECT_PAYLOAD_SIZE];
             uint8_t right[DS_EFFECT_PAYLOAD_SIZE];
         } dsAdaptiveTrigger;
+        struct {
+            uint32_t cursorId;
+            uint16_t width;
+            uint16_t height;
+            uint16_t hotX;
+            uint16_t hotY;
+            uint32_t rgbaLen;
+            uint8_t* rgbaData; // heap-allocated, freed after callback
+        } cursorImageUpdate;
+        struct {
+            bool visible;
+            uint32_t activeCursorId;
+        } cursorState;
     } data;
     LINKED_BLOCKING_QUEUE_ENTRY entry;
 } QUEUED_ASYNC_CALLBACK, *PQUEUED_ASYNC_CALLBACK;
@@ -141,6 +154,9 @@ static PPLT_CRYPTO_CONTEXT decryptionCtx;
 #define IDX_SET_MOTION_EVENT 10
 #define IDX_SET_RGB_LED 11
 #define IDX_DS_ADAPTIVE_TRIGGERS 12
+#define IDX_CURSOR_IMAGE_UPDATE 13
+#define IDX_CURSOR_STATE 14
+#define IDX_CURSOR_POS_SYNC 15
 
 #define CONTROL_STREAM_TIMEOUT_SEC 10
 #define CONTROL_STREAM_LINGER_TIMEOUT_SEC 2
@@ -215,6 +231,9 @@ static const short packetTypesGen7Enc[] = {
     0x5501, // Set motion event (Sunshine protocol extension)
     0x5502, // Set RGB LED (Sunshine protocol extension)
     0x5503, // Set Adaptive Triggers (Sunshine protocol extension)
+    0x5510, // Cursor image update (Sunshine cursor-v1 extension)
+    0x5511, // Cursor state (Sunshine cursor-v1 extension)
+    0x5512, // Cursor pos sync client->server (Sunshine cursor-v1 extension)
 };
 
 static const char requestIdrFrameGen3[] = { 0, 0 };
@@ -375,6 +394,21 @@ static void freeBasicLbqList(PLINKED_BLOCKING_QUEUE_ENTRY entry) {
     }
 }
 
+// Like freeBasicLbqList but also frees inner heap allocations for async callback entries
+static void freeAsyncCallbackLbqList(PLINKED_BLOCKING_QUEUE_ENTRY entry) {
+    PLINKED_BLOCKING_QUEUE_ENTRY nextEntry;
+
+    while (entry != NULL) {
+        nextEntry = entry->flink;
+        PQUEUED_ASYNC_CALLBACK cb = (PQUEUED_ASYNC_CALLBACK)entry->data;
+        if (cb->typeIndex == IDX_CURSOR_IMAGE_UPDATE) {
+            free(cb->data.cursorImageUpdate.rgbaData);
+        }
+        free(cb);
+        entry = nextEntry;
+    }
+}
+
 // Cleans up control stream
 void destroyControlStream(void) {
     LC_ASSERT(stopping);
@@ -384,7 +418,7 @@ void destroyControlStream(void) {
     PltCloseEvent(&idrFrameRequiredEvent);
     freeBasicLbqList(LbqDestroyLinkedBlockingQueue(&referenceFrameControlQueue));
     freeBasicLbqList(LbqDestroyLinkedBlockingQueue(&frameFecStatusQueue));
-    freeBasicLbqList(LbqDestroyLinkedBlockingQueue(&asyncCallbackQueue));
+    freeAsyncCallbackLbqList(LbqDestroyLinkedBlockingQueue(&asyncCallbackQueue));
 
     PltDeleteMutex(&enetMutex);
 }
@@ -1020,6 +1054,20 @@ static void asyncCallbackThreadFunc(void* context) {
                                                   queuedCb->data.dsAdaptiveTrigger.left,
                                                   queuedCb->data.dsAdaptiveTrigger.right);
             break;
+        case IDX_CURSOR_IMAGE_UPDATE:
+            ListenerCallbacks.cursorImageUpdate(queuedCb->data.cursorImageUpdate.cursorId,
+                                                queuedCb->data.cursorImageUpdate.width,
+                                                queuedCb->data.cursorImageUpdate.height,
+                                                queuedCb->data.cursorImageUpdate.hotX,
+                                                queuedCb->data.cursorImageUpdate.hotY,
+                                                queuedCb->data.cursorImageUpdate.rgbaData,
+                                                queuedCb->data.cursorImageUpdate.rgbaLen);
+            free(queuedCb->data.cursorImageUpdate.rgbaData);
+            break;
+        case IDX_CURSOR_STATE:
+            ListenerCallbacks.cursorState(queuedCb->data.cursorState.visible,
+                                          queuedCb->data.cursorState.activeCursorId);
+            break;
         default:
             // Unhandled packet type from queueAsyncCallback()
             LC_ASSERT(false);
@@ -1036,7 +1084,9 @@ static bool needsAsyncCallback(unsigned short packetType) {
            packetType == packetTypes[IDX_SET_MOTION_EVENT] ||
            packetType == packetTypes[IDX_SET_RGB_LED] ||
            packetType == packetTypes[IDX_HDR_INFO] ||
-           packetType == packetTypes[IDX_DS_ADAPTIVE_TRIGGERS];
+           packetType == packetTypes[IDX_DS_ADAPTIVE_TRIGGERS] ||
+           (CursorV1Negotiated && packetType == packetTypes[IDX_CURSOR_IMAGE_UPDATE]) ||
+           (CursorV1Negotiated && packetType == packetTypes[IDX_CURSOR_STATE]);
 }
 
 static void queueAsyncCallback(PNVCTL_ENET_PACKET_HEADER_V1 ctlHdr, int packetLength) {
@@ -1097,6 +1147,60 @@ static void queueAsyncCallback(PNVCTL_ENET_PACKET_HEADER_V1 ctlHdr, int packetLe
         BbGetBytes(&bb, queuedCb->data.dsAdaptiveTrigger.right, DS_EFFECT_PAYLOAD_SIZE);
         queuedCb->typeIndex = IDX_DS_ADAPTIVE_TRIGGERS;
     }
+    else if (CursorV1Negotiated && ctlHdr->type == packetTypes[IDX_CURSOR_IMAGE_UPDATE]) {
+        // Cursor image update: cursorId(u32), width(u16), height(u16), hotX(u16), hotY(u16), rgba_pixels[]
+        uint32_t cursorId;
+        uint16_t w, h, hotX, hotY;
+
+        BbGet32(&bb, &cursorId);
+        BbGet16(&bb, &w);
+        BbGet16(&bb, &h);
+        BbGet16(&bb, &hotX);
+        BbGet16(&bb, &hotY);
+
+        // Validate dimensions
+        if (w == 0 || h == 0 || w > CURSOR_MAX_WIDTH || h > CURSOR_MAX_HEIGHT) {
+            Limelog("Cursor image update: invalid dimensions %ux%u\n", w, h);
+            free(queuedCb);
+            return;
+        }
+
+        uint32_t expectedLen = (uint32_t)w * h * 4;
+        int remainingBytes = packetLength - (int)sizeof(*ctlHdr) - 12; // 4+2+2+2+2 = 12
+        if (remainingBytes < 0 || (uint32_t)remainingBytes < expectedLen) {
+            Limelog("Cursor image update: payload too short (need %u, have %d)\n", expectedLen, remainingBytes);
+            free(queuedCb);
+            return;
+        }
+
+        uint8_t* rgbaData = malloc(expectedLen);
+        if (!rgbaData) {
+            free(queuedCb);
+            return;
+        }
+        BbGetBytes(&bb, rgbaData, expectedLen);
+
+        queuedCb->data.cursorImageUpdate.cursorId = cursorId;
+        queuedCb->data.cursorImageUpdate.width = w;
+        queuedCb->data.cursorImageUpdate.height = h;
+        queuedCb->data.cursorImageUpdate.hotX = hotX;
+        queuedCb->data.cursorImageUpdate.hotY = hotY;
+        queuedCb->data.cursorImageUpdate.rgbaLen = expectedLen;
+        queuedCb->data.cursorImageUpdate.rgbaData = rgbaData;
+        queuedCb->typeIndex = IDX_CURSOR_IMAGE_UPDATE;
+    }
+    else if (CursorV1Negotiated && ctlHdr->type == packetTypes[IDX_CURSOR_STATE]) {
+        // Cursor state: visible(u8), activeCursorId(u32)
+        uint8_t visibleByte;
+        uint32_t activeCursorId;
+
+        BbGet8(&bb, &visibleByte);
+        BbGet32(&bb, &activeCursorId);
+
+        queuedCb->data.cursorState.visible = (visibleByte != 0);
+        queuedCb->data.cursorState.activeCursorId = activeCursorId;
+        queuedCb->typeIndex = IDX_CURSOR_STATE;
+    }
     else {
         // Unhandled packet type from needsAsyncCallback()
         LC_ASSERT(false);
@@ -1107,6 +1211,9 @@ static void queueAsyncCallback(PNVCTL_ENET_PACKET_HEADER_V1 ctlHdr, int packetLe
     err = LbqOfferQueueItem(&asyncCallbackQueue, queuedCb, &queuedCb->entry);
     if (err != LBQ_SUCCESS) {
         Limelog("Failed to queue async callback: %d\n", err);
+        if (queuedCb->typeIndex == IDX_CURSOR_IMAGE_UPDATE) {
+            free(queuedCb->data.cursorImageUpdate.rgbaData);
+        }
         free(queuedCb);
     }
 }
@@ -1397,6 +1504,7 @@ static void controlReceiveThreadFunc(void* context) {
 
 static void lossStatsThreadFunc(void* context) {
     BYTE_BUFFER byteBuffer;
+    int statsLogCounter = 0;
 
     if (usePeriodicPing) {
         char periodicPingPayload[8];
@@ -1435,7 +1543,7 @@ static void lossStatsThreadFunc(void* context) {
                 // parsers reading stats[0], stats[1], stats[3] are unaffected.
                 // The new fields in bytes 32–67 carry the full stream stat snapshot.
                 {
-                    char lossStatsPayload[68];
+                    char lossStatsPayload[72];  // extended from 68: added stats[17]=capacityKbps
                     BYTE_BUFFER lsBuf;
 
                     uint32_t rttMs = 0, rttVarianceMs = 0;
@@ -1467,6 +1575,7 @@ static void lossStatsThreadFunc(void* context) {
                     BbPut32(&lsBuf, snap.intervalFrames);        // stats[14]
                     BbPut32(&lsBuf, snap.intervalDataPkts);      // stats[15]
                     BbPut32(&lsBuf, snap.intervalLostPkts);      // stats[16]
+                    BbPut32(&lsBuf, snap.capacityKbps);           // stats[17] — packet-train capacity estimate
 
                     if (!sendMessageAndForget(packetTypes[IDX_LOSS_STATS],
                                               sizeof(lossStatsPayload),
@@ -1477,6 +1586,16 @@ static void lossStatsThreadFunc(void* context) {
                         Limelog("Loss Stats: Transaction failed: %d\n", (int)LastSocketError());
                         ListenerCallbacks.connectionTerminated(LastSocketFail());
                         return;
+                    }
+
+                    // Log stats roughly once per second (every ~30 intervals of 33ms)
+                    if (++statsLogCounter >= 30) {
+                        statsLogCounter = 0;
+                        Limelog("StreamStats: rtt=%u ms, rtt_var=%u ms, bw=%u kbps, capacity=%u kbps, jitter=%u us, pkt_loss=%u permille, frame_loss=%u permille, frames=%u, data_pkts=%u, lost_pkts=%u\n",
+                                snap.rttMs, snap.rttVarianceMs,
+                                snap.bandwidthKbps, snap.capacityKbps, snap.jitterUs,
+                                snap.pktLossPermille, snap.frameLossPermille,
+                                snap.intervalFrames, snap.intervalDataPkts, snap.intervalLostPkts);
                     }
                 }
             }
@@ -1783,6 +1902,33 @@ bool isControlDataInTransit(void) {
     return ret;
 }
 
+// Send a cursor position sync message to the server (client -> server).
+// Non-blocking: if the control channel is congested, the message is dropped.
+int sendCursorPosSyncOnControlStream(uint16_t x, uint16_t y, uint32_t seqNum) {
+    char payload[8]; // x(u16) + y(u16) + seqNum(u32)
+    BYTE_BUFFER bb;
+
+    LC_ASSERT(AppVersionQuad[0] >= 5);
+    LC_ASSERT(CursorV1Negotiated);
+
+    BbInitializeWrappedBuffer(&bb, payload, 0, sizeof(payload), BYTE_ORDER_LITTLE);
+    BbPut16(&bb, x);
+    BbPut16(&bb, y);
+    BbPut32(&bb, seqNum);
+
+    // Send as unreliable + unsequenced so we never block the caller
+    if (!sendMessageAndForget(packetTypes[IDX_CURSOR_POS_SYNC],
+                              sizeof(payload),
+                              payload,
+                              CTRL_CHANNEL_MOUSE,
+                              ENET_PACKET_FLAG_UNSEQUENCED,
+                              false)) {
+        return -1;
+    }
+
+    return 0;
+}
+
 bool LiGetEstimatedRttInfo(uint32_t* estimatedRtt, uint32_t* estimatedRttVariance) {
     bool ret = false;
 
@@ -1807,6 +1953,7 @@ bool LiGetEstimatedRttInfo(uint32_t* estimatedRtt, uint32_t* estimatedRttVarianc
 
 bool LiGetStreamStats(uint32_t* rttMs, uint32_t* rttVarianceMs,
                       uint32_t* jitterUs, uint32_t* bandwidthKbps,
+                      uint32_t* capacityKbps,
                       uint16_t* pktLossPermille, uint16_t* frameLossPermille) {
     STREAM_STAT_SNAPSHOT snap;
     if (!streamStatsGetSnapshot(&snap)) {
@@ -1816,6 +1963,7 @@ bool LiGetStreamStats(uint32_t* rttMs, uint32_t* rttVarianceMs,
     if (rttVarianceMs)     *rttVarianceMs     = snap.rttVarianceMs;
     if (jitterUs)          *jitterUs          = snap.jitterUs;
     if (bandwidthKbps)     *bandwidthKbps     = snap.bandwidthKbps;
+    if (capacityKbps)      *capacityKbps      = snap.capacityKbps;
     if (pktLossPermille)   *pktLossPermille   = snap.pktLossPermille;
     if (frameLossPermille) *frameLossPermille = snap.frameLossPermille;
     return true;

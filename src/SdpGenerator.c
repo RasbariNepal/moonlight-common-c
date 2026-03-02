@@ -302,6 +302,16 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
         snprintf(payloadStr, sizeof(payloadStr), "%u", EncryptionFeaturesEnabled);
         err |= addAttributeString(&optionHead, "x-ss-general.encryptionEnabled", payloadStr);
 
+        // If the server supports cursor-v1 AND the client has opted in, enable it.
+        // We must NOT negotiate cursor-v1 unless the client wants it, because the
+        // server will stop blending the cursor into the video stream once negotiated.
+        // If we negotiated but the client ignores the callbacks, the cursor would be invisible.
+        if (CursorV1Supported && StreamConfig.enableCursorV1) {
+            err |= addAttributeString(&optionHead, "x-ss-cursor-v1", "1");
+            CursorV1Negotiated = true;
+            Limelog("Cursor-v1 negotiated\n");
+        }
+
         // Enable YUV444 if requested
         if (NegotiatedVideoFormat & VIDEO_FORMAT_MASK_YUV444) {
             err |= addAttributeString(&optionHead, "x-ss-video[0].chromaSamplingType", "1");

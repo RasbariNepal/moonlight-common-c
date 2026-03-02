@@ -11,6 +11,7 @@ typedef struct _STREAM_STAT_SNAPSHOT {
     uint32_t rttVarianceMs;      // ENet RTT variance (ms)
     uint32_t jitterUs;           // RFC 3550 inter-frame receive jitter (µs)
     uint32_t bandwidthKbps;      // incoming video + FEC bitrate (kbps)
+    uint32_t capacityKbps;       // packet-train link capacity estimate (kbps)
     uint16_t pktLossPermille;    // pre-FEC packet loss, 0–1000
     uint16_t frameLossPermille;  // frame-level loss rate, 0–1000
     uint32_t intervalFrames;     // frames completed during this interval
@@ -23,12 +24,14 @@ void streamStatsInitialize(void);
 void streamStatsCleanup(void);
 
 // Called from RtpVideoQueue when a frame is completed (video receive thread, hot path).
-//   recvTimeUs    : PltGetMicroseconds() when the first RTP packet of the frame arrived
-//   ptsUs         : presentationTimeUs of the frame's first packet (RTP ts in µs)
-//   dataPackets   : bufferDataPackets
-//   parityPackets : bufferParityPackets
-//   missingPackets: holes in the sequence at frame-complete time (pre-FEC loss)
-void streamStatsRecordFrame(uint64_t recvTimeUs, uint64_t ptsUs,
+//   firstRecvTimeUs : PltGetMicroseconds() when the first RTP packet of the frame arrived
+//   ptsUs           : presentationTimeUs of the frame's first packet (RTP ts in µs)
+//   lastRecvTimeUs  : PltGetMicroseconds() when the last RTP packet of the frame was queued
+//   dataPackets     : bufferDataPackets
+//   parityPackets   : bufferParityPackets
+//   missingPackets  : holes in the sequence at frame-complete time (pre-FEC loss)
+void streamStatsRecordFrame(uint64_t firstRecvTimeUs, uint64_t ptsUs,
+                             uint64_t lastRecvTimeUs,
                              uint32_t dataPackets, uint32_t parityPackets,
                              uint32_t missingPackets);
 

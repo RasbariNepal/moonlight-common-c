@@ -111,6 +111,7 @@ static void reportFinalFrameFecStatus(PRTP_VIDEO_QUEUE queue) {
     // Feed per-frame signals into the stat accumulator
     streamStatsRecordFrame(queue->bufferFirstRecvTimeUs,
                            queue->bufferFirstRecvPtsUs,
+                           queue->bufferLastRecvTimeUs,
                            queue->bufferDataPackets,
                            queue->bufferParityPackets,
                            queue->missingPackets);
@@ -256,6 +257,7 @@ static int reconstructFrame(PRTP_VIDEO_QUEUE queue) {
     if (queue->receivedDataPackets == queue->bufferDataPackets) {
 #endif
         // We've received a full frame with no need for FEC.
+        reportFinalFrameFecStatus(queue);
         return 0;
     }
 
@@ -343,16 +345,20 @@ static int reconstructFrame(PRTP_VIDEO_QUEUE queue) {
     // If this fails, something is probably wrong with our FEC state.
     LC_ASSERT(ret == 0);
 
-    if (queue->bufferDataPackets != queue->receivedDataPackets) {
 #ifdef FEC_VERBOSE
+    if (queue->bufferDataPackets != queue->receivedDataPackets) {
         Limelog("Recovered %d video data shards from frame %d\n",
                 queue->bufferDataPackets - queue->receivedDataPackets,
                 queue->currentFrameNumber);
+    }
 #endif
 
-        // Report the final FEC status if we needed to perform a recovery
-        reportFinalFrameFecStatus(queue);
-    }
+    // Report the final FEC status for all successfully reconstructed frames.
+    // This also feeds stats (bandwidth, jitter, packet counts) into StreamStats.
+    // In FEC_VALIDATION_MODE bufferDataPackets == receivedDataPackets even after
+    // a synthetic drop+recovery, so we must call unconditionally rather than only
+    // when data was actually missing.
+    reportFinalFrameFecStatus(queue);
 
 cleanup_packets:
     for (i = 0; i < totalPackets; i++) {
@@ -701,6 +707,7 @@ int RtpvAddPacket(PRTP_VIDEO_QUEUE queue, PRTP_PACKET packet, int length, PRTPV_
         connectionSawFrame(queue->currentFrameNumber);
 
         queue->bufferFirstRecvTimeUs = PltGetMicroseconds();
+        queue->bufferLastRecvTimeUs  = queue->bufferFirstRecvTimeUs;
         queue->bufferFirstRecvPtsUs  = ((uint64_t)packet->timestamp * 1000) / PTS_DIVISOR;
         queue->bufferLowestSequenceNumber = U16(packet->sequenceNumber - fecIndex);
         queue->nextContiguousSequenceNumber = queue->bufferLowestSequenceNumber;
@@ -808,6 +815,10 @@ int RtpvAddPacket(PRTP_VIDEO_QUEUE queue, PRTP_PACKET packet, int length, PRTPV_
                 queue->multiFecCurrentBlockNumber = 0;
             }
         }
+
+        // Update the last-receive timestamp for this frame (used for packet-train
+        // capacity estimation in streamStatsRecordFrame).
+        queue->bufferLastRecvTimeUs = PltGetMicroseconds();
 
         return RTPF_RET_QUEUED;
     }

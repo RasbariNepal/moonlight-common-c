@@ -155,3 +155,14 @@ uint64_t LiGetMicroseconds(void) {
 uint32_t LiGetHostFeatureFlags(void) {
     return SunshineFeatureFlags;
 }
+
+bool LiGetCursorV1Negotiated(void) {
+    return CursorV1Negotiated;
+}
+
+int LiSendCursorPosSync(uint16_t x, uint16_t y, uint32_t seqNum) {
+    if (!CursorV1Negotiated) {
+        return -1;
+    }
+    return sendCursorPosSyncOnControlStream(x, y, seqNum);
+}

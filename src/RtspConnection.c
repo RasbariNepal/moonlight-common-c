@@ -1129,6 +1129,17 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
         }
         EncryptionFeaturesEnabled = 0;
 
+        // Look for cursor-v1 support advertisement from Sunshine
+        {
+            unsigned int cursorV1Val = 0;
+            if (parseSdpAttributeToUInt(response.payload, "x-ss-cursor-v1", &cursorV1Val) && cursorV1Val != 0) {
+                CursorV1Supported = true;
+                Limelog("Server supports cursor-v1\n");
+            } else {
+                CursorV1Supported = false;
+            }
+        }
+
         // Parse the Opus surround parameters out of the RTSP DESCRIBE response.
         ret = parseOpusConfigurations(&response);
         if (ret != 0) {

@@ -25,6 +25,7 @@ typedef struct _RTP_VIDEO_QUEUE {
 
     uint64_t bufferFirstRecvTimeUs;
     uint64_t bufferFirstRecvPtsUs;
+    uint64_t bufferLastRecvTimeUs;   // updated on every successfully queued packet
     uint32_t bufferLowestSequenceNumber;
     uint32_t bufferHighestSequenceNumber;
     uint32_t bufferFirstParitySequenceNumber;

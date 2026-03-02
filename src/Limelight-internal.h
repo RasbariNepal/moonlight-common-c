@@ -44,6 +44,10 @@ extern uint32_t ControlConnectData;
 
 extern uint32_t SunshineFeatureFlags;
 
+// Cursor-v1 protocol extension state
+extern bool CursorV1Supported;    // Server advertised cursor-v1
+extern bool CursorV1Negotiated;   // Both sides agreed on cursor-v1
+
 // Encryption flags shared by Sunshine and Moonlight in RTSP
 #define SS_ENC_CONTROL_V2 0x01
 #define SS_ENC_VIDEO 0x02
@@ -125,6 +129,7 @@ void connectionSendFrameFecStatus(PSS_FRAME_FEC_STATUS fecStatus);
 int sendInputPacketOnControlStream(unsigned char* data, int length, uint8_t channelId, uint32_t flags, bool moreData);
 void flushInputOnControlStream(void);
 bool isControlDataInTransit(void);
+int sendCursorPosSyncOnControlStream(uint16_t x, uint16_t y, uint32_t seqNum);
 
 int performRtspHandshake(PSERVER_INFORMATION serverInfo);
 

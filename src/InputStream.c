@@ -40,6 +40,13 @@ static uint8_t currentPenButtonState;
 // per millisecond, we'll wait a little bit to try to batch with
 // the next one. This batching wait paradoxically _decreases_
 // effective input latency by avoiding packet queuing in ENet.
+//
+// Mouse report rate = 1000 / MOUSE_BATCHING_INTERVAL_MS
+//   1 ms  -> 1000 Hz
+//   2 ms  ->  500 Hz
+//   4 ms  ->  250 Hz  (current)
+//   8 ms  ->  125 Hz
+//  10 ms  ->  100 Hz
 #define MOUSE_BATCHING_INTERVAL_MS 1
 #define PEN_BATCHING_INTERVAL_MS 1
 

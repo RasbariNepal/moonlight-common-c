@@ -95,6 +95,12 @@ typedef struct _STREAM_CONFIGURATION {
     // enabled.
     int encryptionFlags;
 
+    // If set to non-zero, the client wants to use Sunshine cursor-v1
+    // protocol extension for client-side cursor rendering. When zero
+    // (the default after LiInitializeStreamConfiguration), the cursor-v1
+    // attribute will not be sent in ANNOUNCE even if the server supports it.
+    int enableCursorV1;
+
     // AES encryption data for the remote input stream. This must be
     // the same as what was passed as rikey and rikeyid
     // in /launch and /resume requests.
@@ -483,6 +489,24 @@ typedef void(*ConnListenerSetAdaptiveTriggers)(uint16_t controllerNumber, uint8_
 // This callback is invoked to set a controller's RGB LED (if present).
 typedef void(*ConnListenerSetControllerLED)(uint16_t controllerNumber, uint8_t r, uint8_t g, uint8_t b);
 
+// Cursor-v1 callbacks (Sunshine protocol extension)
+// This callback is invoked when the server sends a new cursor image.
+// rgbaData points to width*height*4 bytes of RGBA pixel data.
+// The callback must copy the data if it needs it beyond the call.
+#define CURSOR_MAX_WIDTH 128
+#define CURSOR_MAX_HEIGHT 128
+typedef void(*ConnListenerCursorImageUpdate)(
+    uint32_t cursorId,
+    uint16_t width, uint16_t height,
+    uint16_t hotX, uint16_t hotY,
+    const uint8_t* rgbaData, uint32_t rgbaLen);
+
+// This callback is invoked when the server sends a cursor state change
+// (visibility and/or active cursor ID).
+typedef void(*ConnListenerCursorState)(
+    bool visible,
+    uint32_t activeCursorId);
+
 typedef struct _CONNECTION_LISTENER_CALLBACKS {
     ConnListenerStageStarting stageStarting;
     ConnListenerStageComplete stageComplete;
@@ -497,6 +521,8 @@ typedef struct _CONNECTION_LISTENER_CALLBACKS {
     ConnListenerSetMotionEventState setMotionEventState;
     ConnListenerSetControllerLED setControllerLED;
     ConnListenerSetAdaptiveTriggers setAdaptiveTriggers;
+    ConnListenerCursorImageUpdate cursorImageUpdate;
+    ConnListenerCursorState cursorState;
 } CONNECTION_LISTENER_CALLBACKS, *PCONNECTION_LISTENER_CALLBACKS;
 
 // Use this function to zero the connection callbacks when allocated on the stack or heap
@@ -900,6 +926,7 @@ const RTP_VIDEO_STATS* LiGetRTPVideoStats(void);
 // Returns false if no snapshot is available yet (too early in the session).
 bool LiGetStreamStats(uint32_t* rttMs, uint32_t* rttVarianceMs,
                       uint32_t* jitterUs, uint32_t* bandwidthKbps,
+                      uint32_t* capacityKbps,
                       uint16_t* pktLossPermille, uint16_t* frameLossPermille);
 
 // Port index flags for use with LiGetPortFromPortFlagIndex() and LiGetProtocolFromPortFlagIndex()
@@ -1010,6 +1037,15 @@ void LiRequestIdrFrame(void);
 #define LI_FF_PEN_TOUCH_EVENTS        0x01 // LiSendTouchEvent()/LiSendPenEvent() supported
 #define LI_FF_CONTROLLER_TOUCH_EVENTS 0x02 // LiSendControllerTouchEvent() supported
 uint32_t LiGetHostFeatureFlags(void);
+
+// Returns true if cursor-v1 support was negotiated during RTSP handshake.
+bool LiGetCursorV1Negotiated(void);
+
+// Send a cursor position sync message to the server (client -> server).
+// Coordinates are in stream-space (0..streamWidth, 0..streamHeight).
+// seqNum should be monotonically increasing.
+// This is non-blocking; the message is dropped if the control channel is congested.
+int LiSendCursorPosSync(uint16_t x, uint16_t y, uint32_t seqNum);
 
 #ifdef __cplusplus
 }

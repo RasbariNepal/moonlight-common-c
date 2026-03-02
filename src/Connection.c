@@ -36,6 +36,8 @@ uint32_t SunshineFeatureFlags;
 uint32_t EncryptionFeaturesSupported;
 uint32_t EncryptionFeaturesRequested;
 uint32_t EncryptionFeaturesEnabled;
+bool CursorV1Supported;
+bool CursorV1Negotiated;
 
 // Connection stages
 static const char* stageNames[STAGE_MAX] = {
@@ -281,6 +283,8 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
 
     alreadyTerminated = false;
     ConnectionInterrupted = false;
+    CursorV1Supported = false;
+    CursorV1Negotiated = false;
     
     // Validate the audio configuration
     if (MAGIC_BYTE_FROM_AUDIO_CONFIG(StreamConfig.audioConfiguration) != 0xCA ||

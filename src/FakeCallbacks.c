@@ -43,6 +43,8 @@ static void fakeClSetAdaptiveTriggers(uint16_t controllerNumber, uint8_t eventFl
 static void fakeClSetControllerLED(uint16_t controllerNumber, uint8_t r, uint8_t g, uint8_t b) {}
 static void fakeClCursorImageUpdate(uint32_t cursorId, uint16_t width, uint16_t height, uint16_t hotX, uint16_t hotY, const uint8_t* rgbaData, uint32_t rgbaLen) {}
 static void fakeClCursorState(bool visible, uint32_t activeCursorId) {}
+static void fakeClCursorImageUpdateV2(uint32_t cursorId, uint16_t width, uint16_t height, uint16_t hotX, uint16_t hotY, uint8_t cursorType, const uint8_t* rgbaData, uint32_t rgbaLen, const uint8_t* xorData, uint32_t xorLen) {}
+static void fakeClCursorCacheRef(uint32_t cursorId) {}
 
 static CONNECTION_LISTENER_CALLBACKS fakeClCallbacks = {
     .stageStarting = fakeClStageStarting,
@@ -60,6 +62,8 @@ static CONNECTION_LISTENER_CALLBACKS fakeClCallbacks = {
     .setAdaptiveTriggers = fakeClSetAdaptiveTriggers,
     .cursorImageUpdate = fakeClCursorImageUpdate,
     .cursorState = fakeClCursorState,
+    .cursorImageUpdateV2 = fakeClCursorImageUpdateV2,
+    .cursorCacheRef = fakeClCursorCacheRef,
 };
 
 void fixupMissingCallbacks(PDECODER_RENDERER_CALLBACKS* drCallbacks, PAUDIO_RENDERER_CALLBACKS* arCallbacks,
@@ -155,6 +159,12 @@ void fixupMissingCallbacks(PDECODER_RENDERER_CALLBACKS* drCallbacks, PAUDIO_REND
         }
         if ((*clCallbacks)->cursorState == NULL) {
             (*clCallbacks)->cursorState = fakeClCursorState;
+        }
+        if ((*clCallbacks)->cursorImageUpdateV2 == NULL) {
+            (*clCallbacks)->cursorImageUpdateV2 = fakeClCursorImageUpdateV2;
+        }
+        if ((*clCallbacks)->cursorCacheRef == NULL) {
+            (*clCallbacks)->cursorCacheRef = fakeClCursorCacheRef;
         }
     }
 }

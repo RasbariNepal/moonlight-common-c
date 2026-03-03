@@ -306,7 +306,15 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
         // We must NOT negotiate cursor-v1 unless the client wants it, because the
         // server will stop blending the cursor into the video stream once negotiated.
         // If we negotiated but the client ignores the callbacks, the cursor would be invisible.
-        if (CursorV1Supported && StreamConfig.enableCursorV1) {
+        if (CursorV2Supported && StreamConfig.enableCursorV2) {
+            // v2 is a superset of v1: negotiate both so the server disables cursor blending
+            // and knows to send v2 packet types.
+            err |= addAttributeString(&optionHead, "x-ss-cursor-v1", "1");
+            CursorV1Negotiated = true;
+            err |= addAttributeString(&optionHead, "x-ss-cursor-v2", "1");
+            CursorV2Negotiated = true;
+            Limelog("Cursor-v2 negotiated\n");
+        } else if (CursorV1Supported && StreamConfig.enableCursorV1) {
             err |= addAttributeString(&optionHead, "x-ss-cursor-v1", "1");
             CursorV1Negotiated = true;
             Limelog("Cursor-v1 negotiated\n");

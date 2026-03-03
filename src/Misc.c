@@ -160,6 +160,10 @@ bool LiGetCursorV1Negotiated(void) {
     return CursorV1Negotiated;
 }
 
+bool LiGetCursorV2Negotiated(void) {
+    return CursorV2Negotiated;
+}
+
 int LiSendCursorPosSync(uint16_t x, uint16_t y, uint32_t seqNum) {
     if (!CursorV1Negotiated) {
         return -1;

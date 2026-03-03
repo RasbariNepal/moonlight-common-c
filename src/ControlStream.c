@@ -97,6 +97,21 @@ typedef struct _QUEUED_ASYNC_CALLBACK {
             bool visible;
             uint32_t activeCursorId;
         } cursorState;
+        struct {
+            uint32_t cursorId;
+            uint16_t width;
+            uint16_t height;
+            uint16_t hotX;
+            uint16_t hotY;
+            uint8_t cursorType;
+            uint32_t rgbaLen;
+            uint8_t* rgbaData; // heap-allocated, freed after callback
+            uint32_t xorLen;
+            uint8_t* xorData;  // heap-allocated, freed after callback (may be NULL)
+        } cursorImageV2;
+        struct {
+            uint32_t cursorId;
+        } cursorCacheRef;
     } data;
     LINKED_BLOCKING_QUEUE_ENTRY entry;
 } QUEUED_ASYNC_CALLBACK, *PQUEUED_ASYNC_CALLBACK;
@@ -157,6 +172,8 @@ static PPLT_CRYPTO_CONTEXT decryptionCtx;
 #define IDX_CURSOR_IMAGE_UPDATE 13
 #define IDX_CURSOR_STATE 14
 #define IDX_CURSOR_POS_SYNC 15
+#define IDX_CURSOR_IMAGE_V2 16
+#define IDX_CURSOR_CACHE_REF 17
 
 #define CONTROL_STREAM_TIMEOUT_SEC 10
 #define CONTROL_STREAM_LINGER_TIMEOUT_SEC 2
@@ -234,6 +251,8 @@ static const short packetTypesGen7Enc[] = {
     0x5510, // Cursor image update (Sunshine cursor-v1 extension)
     0x5511, // Cursor state (Sunshine cursor-v1 extension)
     0x5512, // Cursor pos sync client->server (Sunshine cursor-v1 extension)
+    0x5513, // Cursor image update v2 (Sunshine cursor-v2 extension)
+    0x5514, // Cursor cache reference (Sunshine cursor-v2 extension)
 };
 
 static const char requestIdrFrameGen3[] = { 0, 0 };
@@ -403,6 +422,10 @@ static void freeAsyncCallbackLbqList(PLINKED_BLOCKING_QUEUE_ENTRY entry) {
         PQUEUED_ASYNC_CALLBACK cb = (PQUEUED_ASYNC_CALLBACK)entry->data;
         if (cb->typeIndex == IDX_CURSOR_IMAGE_UPDATE) {
             free(cb->data.cursorImageUpdate.rgbaData);
+        }
+        else if (cb->typeIndex == IDX_CURSOR_IMAGE_V2) {
+            free(cb->data.cursorImageV2.rgbaData);
+            free(cb->data.cursorImageV2.xorData);
         }
         free(cb);
         entry = nextEntry;
@@ -1068,6 +1091,23 @@ static void asyncCallbackThreadFunc(void* context) {
             ListenerCallbacks.cursorState(queuedCb->data.cursorState.visible,
                                           queuedCb->data.cursorState.activeCursorId);
             break;
+        case IDX_CURSOR_IMAGE_V2:
+            ListenerCallbacks.cursorImageUpdateV2(queuedCb->data.cursorImageV2.cursorId,
+                                                  queuedCb->data.cursorImageV2.width,
+                                                  queuedCb->data.cursorImageV2.height,
+                                                  queuedCb->data.cursorImageV2.hotX,
+                                                  queuedCb->data.cursorImageV2.hotY,
+                                                  queuedCb->data.cursorImageV2.cursorType,
+                                                  queuedCb->data.cursorImageV2.rgbaData,
+                                                  queuedCb->data.cursorImageV2.rgbaLen,
+                                                  queuedCb->data.cursorImageV2.xorData,
+                                                  queuedCb->data.cursorImageV2.xorLen);
+            free(queuedCb->data.cursorImageV2.rgbaData);
+            free(queuedCb->data.cursorImageV2.xorData);
+            break;
+        case IDX_CURSOR_CACHE_REF:
+            ListenerCallbacks.cursorCacheRef(queuedCb->data.cursorCacheRef.cursorId);
+            break;
         default:
             // Unhandled packet type from queueAsyncCallback()
             LC_ASSERT(false);
@@ -1086,7 +1126,9 @@ static bool needsAsyncCallback(unsigned short packetType) {
            packetType == packetTypes[IDX_HDR_INFO] ||
            packetType == packetTypes[IDX_DS_ADAPTIVE_TRIGGERS] ||
            (CursorV1Negotiated && packetType == packetTypes[IDX_CURSOR_IMAGE_UPDATE]) ||
-           (CursorV1Negotiated && packetType == packetTypes[IDX_CURSOR_STATE]);
+           (CursorV1Negotiated && packetType == packetTypes[IDX_CURSOR_STATE]) ||
+           (CursorV2Negotiated && packetType == packetTypes[IDX_CURSOR_IMAGE_V2]) ||
+           (CursorV2Negotiated && packetType == packetTypes[IDX_CURSOR_CACHE_REF]);
 }
 
 static void queueAsyncCallback(PNVCTL_ENET_PACKET_HEADER_V1 ctlHdr, int packetLength) {
@@ -1201,6 +1243,77 @@ static void queueAsyncCallback(PNVCTL_ENET_PACKET_HEADER_V1 ctlHdr, int packetLe
         queuedCb->data.cursorState.activeCursorId = activeCursorId;
         queuedCb->typeIndex = IDX_CURSOR_STATE;
     }
+    else if (CursorV2Negotiated && ctlHdr->type == packetTypes[IDX_CURSOR_IMAGE_V2]) {
+        // Cursor image v2: cursor_image_header_v2_t (18 bytes) + rgba_data + xor_data
+        // Header: cursorId(u32), width(u16), height(u16), hotX(u16), hotY(u16),
+        //         cursorType(u8), reserved(u8), xorLen(u32)
+        uint32_t cursorId;
+        uint16_t w, h, hotX, hotY;
+        uint8_t cursorType, reserved;
+        uint32_t xorLen;
+
+        BbGet32(&bb, &cursorId);
+        BbGet16(&bb, &w);
+        BbGet16(&bb, &h);
+        BbGet16(&bb, &hotX);
+        BbGet16(&bb, &hotY);
+        BbGet8(&bb, &cursorType);
+        BbGet8(&bb, &reserved);
+        BbGet32(&bb, &xorLen);
+
+        if (w == 0 || h == 0 || w > CURSOR_MAX_WIDTH || h > CURSOR_MAX_HEIGHT) {
+            Limelog("Cursor image v2: invalid dimensions %ux%u\n", w, h);
+            free(queuedCb);
+            return;
+        }
+
+        uint32_t rgbaLen = (uint32_t)w * h * 4;
+        uint32_t totalDataNeeded = rgbaLen + xorLen;
+        int remainingBytes = packetLength - (int)sizeof(*ctlHdr) - 18; // 18-byte header
+        if (remainingBytes < 0 || (uint32_t)remainingBytes < totalDataNeeded) {
+            Limelog("Cursor image v2: payload too short (need %u, have %d)\n", totalDataNeeded, remainingBytes);
+            free(queuedCb);
+            return;
+        }
+
+        uint8_t* rgbaData = malloc(rgbaLen);
+        if (!rgbaData) {
+            free(queuedCb);
+            return;
+        }
+        BbGetBytes(&bb, rgbaData, rgbaLen);
+
+        uint8_t* xorData = NULL;
+        if (xorLen > 0) {
+            xorData = malloc(xorLen);
+            if (!xorData) {
+                free(rgbaData);
+                free(queuedCb);
+                return;
+            }
+            BbGetBytes(&bb, xorData, xorLen);
+        }
+
+        queuedCb->data.cursorImageV2.cursorId = cursorId;
+        queuedCb->data.cursorImageV2.width = w;
+        queuedCb->data.cursorImageV2.height = h;
+        queuedCb->data.cursorImageV2.hotX = hotX;
+        queuedCb->data.cursorImageV2.hotY = hotY;
+        queuedCb->data.cursorImageV2.cursorType = cursorType;
+        queuedCb->data.cursorImageV2.rgbaLen = rgbaLen;
+        queuedCb->data.cursorImageV2.rgbaData = rgbaData;
+        queuedCb->data.cursorImageV2.xorLen = xorLen;
+        queuedCb->data.cursorImageV2.xorData = xorData;
+        queuedCb->typeIndex = IDX_CURSOR_IMAGE_V2;
+    }
+    else if (CursorV2Negotiated && ctlHdr->type == packetTypes[IDX_CURSOR_CACHE_REF]) {
+        // Cursor cache reference: cursorId(u32)
+        uint32_t cursorId;
+        BbGet32(&bb, &cursorId);
+
+        queuedCb->data.cursorCacheRef.cursorId = cursorId;
+        queuedCb->typeIndex = IDX_CURSOR_CACHE_REF;
+    }
     else {
         // Unhandled packet type from needsAsyncCallback()
         LC_ASSERT(false);
@@ -1213,6 +1326,10 @@ static void queueAsyncCallback(PNVCTL_ENET_PACKET_HEADER_V1 ctlHdr, int packetLe
         Limelog("Failed to queue async callback: %d\n", err);
         if (queuedCb->typeIndex == IDX_CURSOR_IMAGE_UPDATE) {
             free(queuedCb->data.cursorImageUpdate.rgbaData);
+        }
+        else if (queuedCb->typeIndex == IDX_CURSOR_IMAGE_V2) {
+            free(queuedCb->data.cursorImageV2.rgbaData);
+            free(queuedCb->data.cursorImageV2.xorData);
         }
         free(queuedCb);
     }

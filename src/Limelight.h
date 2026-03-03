@@ -101,6 +101,12 @@ typedef struct _STREAM_CONFIGURATION {
     // attribute will not be sent in ANNOUNCE even if the server supports it.
     int enableCursorV1;
 
+    // If set to non-zero, the client wants to use Sunshine cursor-v2
+    // protocol extension (superset of v1, adds cursor type and XOR data).
+    // v2 is strictly better than v1; when v2 is negotiated, v1 is also
+    // negotiated so the server knows cursor blending is not needed.
+    int enableCursorV2;
+
     // AES encryption data for the remote input stream. This must be
     // the same as what was passed as rikey and rikeyid
     // in /launch and /resume requests.
@@ -507,6 +513,23 @@ typedef void(*ConnListenerCursorState)(
     bool visible,
     uint32_t activeCursorId);
 
+// Cursor-v2 callbacks (Sunshine protocol extension)
+// cursorType: 0=COLOR, 1=MONOCHROME, 2=MASKED_COLOR
+// rgbaData: width*height*4 bytes of RGBA pixel data (always present)
+// xorData: width*height*4 bytes of XOR mask (non-NULL when xorLen > 0)
+// The callback must copy any data it needs beyond the call.
+typedef void(*ConnListenerCursorImageUpdateV2)(
+    uint32_t cursorId,
+    uint16_t width, uint16_t height,
+    uint16_t hotX, uint16_t hotY,
+    uint8_t cursorType,
+    const uint8_t* rgbaData, uint32_t rgbaLen,
+    const uint8_t* xorData, uint32_t xorLen);
+
+// This callback is invoked when the server sends a cursor cache reference,
+// switching the active cursor to a previously sent cursor shape.
+typedef void(*ConnListenerCursorCacheRef)(uint32_t cursorId);
+
 typedef struct _CONNECTION_LISTENER_CALLBACKS {
     ConnListenerStageStarting stageStarting;
     ConnListenerStageComplete stageComplete;
@@ -523,6 +546,8 @@ typedef struct _CONNECTION_LISTENER_CALLBACKS {
     ConnListenerSetAdaptiveTriggers setAdaptiveTriggers;
     ConnListenerCursorImageUpdate cursorImageUpdate;
     ConnListenerCursorState cursorState;
+    ConnListenerCursorImageUpdateV2 cursorImageUpdateV2;
+    ConnListenerCursorCacheRef cursorCacheRef;
 } CONNECTION_LISTENER_CALLBACKS, *PCONNECTION_LISTENER_CALLBACKS;
 
 // Use this function to zero the connection callbacks when allocated on the stack or heap
@@ -1040,6 +1065,9 @@ uint32_t LiGetHostFeatureFlags(void);
 
 // Returns true if cursor-v1 support was negotiated during RTSP handshake.
 bool LiGetCursorV1Negotiated(void);
+
+// Returns true if cursor-v2 support was negotiated during RTSP handshake.
+bool LiGetCursorV2Negotiated(void);
 
 // Send a cursor position sync message to the server (client -> server).
 // Coordinates are in stream-space (0..streamWidth, 0..streamHeight).

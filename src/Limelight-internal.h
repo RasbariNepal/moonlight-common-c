@@ -48,6 +48,10 @@ extern uint32_t SunshineFeatureFlags;
 extern bool CursorV1Supported;    // Server advertised cursor-v1
 extern bool CursorV1Negotiated;   // Both sides agreed on cursor-v1
 
+// Cursor-v2 protocol extension state
+extern bool CursorV2Supported;    // Server advertised cursor-v2
+extern bool CursorV2Negotiated;   // Both sides agreed on cursor-v2
+
 // Encryption flags shared by Sunshine and Moonlight in RTSP
 #define SS_ENC_CONTROL_V2 0x01
 #define SS_ENC_VIDEO 0x02

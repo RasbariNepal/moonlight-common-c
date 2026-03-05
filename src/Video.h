@@ -86,3 +86,11 @@ typedef struct _SS_RFI_REQUEST {
 } SS_RFI_REQUEST, *PSS_RFI_REQUEST;
 
 #pragma pack(pop)
+
+// Called by RtpVideoQueue.c to cache per-frame FEC status for the depacketizer.
+void setLastFrameFecStatus(uint16_t totalDataPkts, uint16_t totalParityPkts,
+                           uint16_t receivedDataPkts, uint16_t receivedParityPkts,
+                           uint16_t missingPkts, uint8_t fecPercentage,
+                           uint8_t fecRecoveryUsed, uint64_t lastPktRecvTimeUs,
+                           uint32_t maxInterPktDeltaUs, uint16_t burstCount,
+                           uint16_t latePktCount, uint32_t senderWallTsMs);

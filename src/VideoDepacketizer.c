@@ -25,6 +25,41 @@ static uint32_t firstPacketRtpTimestamp;
 static bool dropStatePending;
 static bool idrFrameProcessed;
 
+// Per-frame FEC status cache — written by RtpVideoQueue.c via setLastFrameFecStatus(),
+// read by reassembleFrame() to populate the DECODE_UNIT FEC fields.
+static uint16_t lastFecTotalDataPkts;
+static uint16_t lastFecTotalParityPkts;
+static uint16_t lastFecReceivedDataPkts;
+static uint16_t lastFecReceivedParityPkts;
+static uint16_t lastFecMissingPkts;
+static uint8_t  lastFecPercentage;
+static uint8_t  lastFecRecoveryUsed;
+static uint64_t lastFrameLastPktRecvTimeUs;
+static uint32_t lastMaxInterPktDeltaUs;
+static uint16_t lastBurstCount;
+static uint16_t lastLatePktCount;
+static uint32_t lastSenderWallTsMs;
+
+void setLastFrameFecStatus(uint16_t totalDataPkts, uint16_t totalParityPkts,
+                           uint16_t receivedDataPkts, uint16_t receivedParityPkts,
+                           uint16_t missingPkts, uint8_t fecPercentage,
+                           uint8_t fecRecoveryUsed, uint64_t lastPktRecvTimeUs,
+                           uint32_t maxInterPktDeltaUs, uint16_t burstCount,
+                           uint16_t latePktCount, uint32_t senderWallTsMs) {
+    lastFecTotalDataPkts = totalDataPkts;
+    lastFecTotalParityPkts = totalParityPkts;
+    lastFecReceivedDataPkts = receivedDataPkts;
+    lastFecReceivedParityPkts = receivedParityPkts;
+    lastFecMissingPkts = missingPkts;
+    lastFecPercentage = fecPercentage;
+    lastFecRecoveryUsed = fecRecoveryUsed;
+    lastFrameLastPktRecvTimeUs = lastPktRecvTimeUs;
+    lastMaxInterPktDeltaUs = maxInterPktDeltaUs;
+    lastBurstCount = burstCount;
+    lastLatePktCount = latePktCount;
+    lastSenderWallTsMs = senderWallTsMs;
+}
+
 #define DR_CLEANUP -1000
 
 #define CONSECUTIVE_DROP_LIMIT 120
@@ -489,6 +524,21 @@ static void reassembleFrame(int frameNumber, bool frameIsLTR) {
             qdu->decodeUnit.presentationTimeUs = firstPacketPresentationTime;
             qdu->decodeUnit.rtpTimestamp = firstPacketRtpTimestamp;
             qdu->decodeUnit.enqueueTimeUs = PltGetMicroseconds();
+            qdu->decodeUnit.telemetryRecord = NULL;
+
+            // Copy per-frame FEC status from RtpVideoQueue cache
+            qdu->decodeUnit.fecTotalDataPkts = lastFecTotalDataPkts;
+            qdu->decodeUnit.fecTotalParityPkts = lastFecTotalParityPkts;
+            qdu->decodeUnit.fecReceivedDataPkts = lastFecReceivedDataPkts;
+            qdu->decodeUnit.fecReceivedParityPkts = lastFecReceivedParityPkts;
+            qdu->decodeUnit.fecMissingPkts = lastFecMissingPkts;
+            qdu->decodeUnit.fecPercentage = lastFecPercentage;
+            qdu->decodeUnit.fecRecoveryUsed = lastFecRecoveryUsed;
+            qdu->decodeUnit.lastPktReceiveTimeUs = lastFrameLastPktRecvTimeUs;
+            qdu->decodeUnit.maxInterPktDeltaUs = lastMaxInterPktDeltaUs;
+            qdu->decodeUnit.burstCount = lastBurstCount;
+            qdu->decodeUnit.latePktCount = lastLatePktCount;
+            qdu->decodeUnit.senderWallTsMs = lastSenderWallTsMs;
 
             // These might be wrong for a few frames during a transition between SDR and HDR,
             // but the effects shouldn't very noticable since that's an infrequent operation.

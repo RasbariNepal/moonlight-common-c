@@ -203,6 +203,32 @@ typedef struct _DECODE_UNIT {
     // Note: This is not currently parsed from the actual bitstream, so if your
     // client has access to a bitstream parser, prefer that over this field.
     uint8_t colorspace;
+
+    // Per-frame FEC status (populated from RtpVideoQueue)
+    uint16_t fecTotalDataPkts;
+    uint16_t fecTotalParityPkts;
+    uint16_t fecReceivedDataPkts;
+    uint16_t fecReceivedParityPkts;
+    uint16_t fecMissingPkts;
+    uint8_t  fecPercentage;
+    uint8_t  fecRecoveryUsed;  // 1 if RS recovery was needed
+
+    // Last packet receive time (microseconds, monotonic clock)
+    uint64_t lastPktReceiveTimeUs;
+
+    // Per-packet arrival timing within this frame
+    uint32_t maxInterPktDeltaUs;  // largest gap between consecutive packet arrivals (us)
+    uint16_t burstCount;          // packets arriving within 1ms of previous packet
+    uint16_t latePktCount;        // packets arriving >5ms after previous packet
+
+    // Sender wall-clock timestamp (truncated uint32 ms) from the RTP extension header.
+    // 0 when the server doesn't send this field (old Sunshine / GFE).
+    uint32_t senderWallTsMs;
+
+    // Opaque pointer to a per-frame telemetry record (PFRAME_TELEMETRY_RECORD).
+    // Allocated by the client's TelemetryCollector and passed through the pipeline
+    // so each stage can stamp its timing/metric fields. NULL when telemetry is disabled.
+    void* telemetryRecord;
 } DECODE_UNIT, *PDECODE_UNIT;
 
 // Specifies that the audio stream should be encoded in stereo (default)

@@ -115,6 +115,21 @@ static void reportFinalFrameFecStatus(PRTP_VIDEO_QUEUE queue) {
                            queue->bufferDataPackets,
                            queue->bufferParityPackets,
                            queue->missingPackets);
+
+    // Cache FEC status for the depacketizer to attach to the DECODE_UNIT
+    setLastFrameFecStatus(
+        queue->bufferDataPackets,
+        queue->bufferParityPackets,
+        queue->receivedDataPackets,
+        queue->receivedParityPackets,
+        queue->missingPackets,
+        (uint8_t)queue->fecPercentage,
+        (queue->receivedDataPackets < queue->bufferDataPackets) ? 1 : 0,
+        queue->bufferLastRecvTimeUs,
+        queue->maxInterPktDeltaUs,
+        queue->burstCount,
+        queue->latePktCount,
+        queue->firstPktSenderWallTsMs);
 }
 
 // newEntry is contained within the packet buffer so we free the whole entry by freeing entry->packet
@@ -566,6 +581,9 @@ int RtpvAddPacket(PRTP_VIDEO_QUEUE queue, PRTP_PACKET packet, int length, PRTPV_
 
     int dataOffset = sizeof(*packet);
     if (packet->header & FLAG_EXTENSION) {
+        // Read sender wall-clock timestamp (uint32 big-endian, ms since epoch truncated to 32 bits).
+        // New Sunshine sends this; old servers/GFE send 0 or irrelevant data.
+        queue->senderWallTsMs = BE32(*(uint32_t*)((char*)packet + dataOffset));
         dataOffset += 4; // 2 additional fields
     }
 
@@ -708,6 +726,11 @@ int RtpvAddPacket(PRTP_VIDEO_QUEUE queue, PRTP_PACKET packet, int length, PRTPV_
 
         queue->bufferFirstRecvTimeUs = PltGetMicroseconds();
         queue->bufferLastRecvTimeUs  = queue->bufferFirstRecvTimeUs;
+        queue->prevPktRecvTimeUs     = queue->bufferFirstRecvTimeUs;
+        queue->firstPktSenderWallTsMs = queue->senderWallTsMs;
+        queue->maxInterPktDeltaUs    = 0;
+        queue->burstCount            = 0;
+        queue->latePktCount          = 0;
         queue->bufferFirstRecvPtsUs  = ((uint64_t)packet->timestamp * 1000) / PTS_DIVISOR;
         queue->bufferLowestSequenceNumber = U16(packet->sequenceNumber - fecIndex);
         queue->nextContiguousSequenceNumber = queue->bufferLowestSequenceNumber;
@@ -784,6 +807,28 @@ int RtpvAddPacket(PRTP_VIDEO_QUEUE queue, PRTP_PACKET packet, int length, PRTPV_
             LC_ASSERT(queue->receivedParityPackets <= queue->bufferParityPackets);
         }
 
+        // Stamp the last-receive time for this packet BEFORE calling reconstructFrame().
+        // reportFinalFrameFecStatus() (called inside reconstructFrame when the frame completes)
+        // reads bufferLastRecvTimeUs to compute ts_last_pkt_ns. If we update it afterwards,
+        // the completing packet's arrival time is missed and the telemetry records the
+        // second-to-last packet's time instead.
+        queue->bufferLastRecvTimeUs = PltGetMicroseconds();
+
+        // Track inter-packet arrival timing for WiFi jitter analysis
+        {
+            uint64_t deltaUs = queue->bufferLastRecvTimeUs - queue->prevPktRecvTimeUs;
+            if ((uint32_t)deltaUs > queue->maxInterPktDeltaUs) {
+                queue->maxInterPktDeltaUs = (uint32_t)deltaUs;
+            }
+            if (deltaUs <= 1000) { // within 1ms = burst
+                queue->burstCount++;
+            }
+            if (deltaUs > 5000) { // >5ms = late
+                queue->latePktCount++;
+            }
+            queue->prevPktRecvTimeUs = queue->bufferLastRecvTimeUs;
+        }
+
         // Try to submit this frame. If we haven't received enough packets,
         // this will fail and we'll keep waiting.
         if (reconstructFrame(queue) == 0) {
@@ -815,10 +860,6 @@ int RtpvAddPacket(PRTP_VIDEO_QUEUE queue, PRTP_PACKET packet, int length, PRTPV_
                 queue->multiFecCurrentBlockNumber = 0;
             }
         }
-
-        // Update the last-receive timestamp for this frame (used for packet-train
-        // capacity estimation in streamStatsRecordFrame).
-        queue->bufferLastRecvTimeUs = PltGetMicroseconds();
 
         return RTPF_RET_QUEUED;
     }

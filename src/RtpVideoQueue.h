@@ -26,6 +26,12 @@ typedef struct _RTP_VIDEO_QUEUE {
     uint64_t bufferFirstRecvTimeUs;
     uint64_t bufferFirstRecvPtsUs;
     uint64_t bufferLastRecvTimeUs;   // updated on every successfully queued packet
+
+    // Per-packet arrival timing (computed across all packets in the current frame)
+    uint64_t prevPktRecvTimeUs;      // previous packet's receive time (for delta calc)
+    uint32_t maxInterPktDeltaUs;     // largest gap between consecutive packet arrivals
+    uint16_t burstCount;             // packets arriving within 1ms of previous packet
+    uint16_t latePktCount;           // packets arriving >5ms after previous packet
     uint32_t bufferLowestSequenceNumber;
     uint32_t bufferHighestSequenceNumber;
     uint32_t bufferFirstParitySequenceNumber;
@@ -45,6 +51,9 @@ typedef struct _RTP_VIDEO_QUEUE {
     bool multiFecCapable;
     uint8_t multiFecCurrentBlockNumber;
     uint8_t multiFecLastBlockNumber;
+
+    uint32_t senderWallTsMs;            // sender wall-clock ms from RTP extension header (current packet)
+    uint32_t firstPktSenderWallTsMs;    // sender wall-clock ms cached from the first packet of the frame
 
     uint64_t lastOosFramePresentationTimestamp;
     bool receivedOosData;

@@ -2118,6 +2118,13 @@ int startControlStream(void) {
 
         client->intercept = ignoreDisconnectIntercept;
 
+        // Raise MTU from default 900 to 1400 — reduces fragmentation for cursor images
+        client->mtu = 1400;
+
+        // Enlarge socket buffers for bursty control traffic
+        enet_socket_set_option(client->socket, ENET_SOCKOPT_SNDBUF, 512 * 1024);
+        enet_socket_set_option(client->socket, ENET_SOCKOPT_RCVBUF, 512 * 1024);
+
         // Enable high priority QoS marking on control stream traffic
         //
         // NB: It is important to do this before connecting because there's logic in the connect
@@ -2173,8 +2180,14 @@ int startControlStream(void) {
         // The 3DS can take a bit longer to set up when starting fresh
         enet_peer_timeout(peer, 2, 60000, 60000);
 #else
-        // Set the peer timeout to 10 seconds and limit backoff to 2x RTT
-        enet_peer_timeout(peer, 2, 10000, 10000);
+        // Tighten timeouts for interactive streaming:
+        // - 5 retransmit attempts before disconnect (was 2)
+        // - 1s minimum retransmit timeout (was 10s)
+        // - 5s maximum backoff (was 10s)
+        enet_peer_timeout(peer, 5, 1000, 5000);
+
+        // Faster throttle adaptation (2s interval instead of default 5s)
+        enet_peer_throttle_configure(peer, 2000, 4, 2);
 #endif
     }
     else {

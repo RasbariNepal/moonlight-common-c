@@ -213,6 +213,19 @@ typedef struct _SS_MOUSE_EPOCH_RESET_PACKET {
     uint16_t newEpoch;          // Epoch number (increments on each reset)
 } SS_MOUSE_EPOCH_RESET_PACKET, *PSS_MOUSE_EPOCH_RESET_PACKET;
 
+// Unreliable input: client cursor position sync for drift correction
+// Sent by client when cursor protocol is negotiated + relative mouse mode active.
+// Server uses this to correct drift between client and server cursor positions.
+#define SS_CURSOR_POS_SYNC_MAGIC 0x55000013
+typedef struct _SS_CURSOR_POS_SYNC_PACKET {
+    NV_INPUT_HEADER header;
+    uint16_t x;              // Stream-space X coordinate, little-endian
+    uint16_t y;              // Stream-space Y coordinate, little-endian
+    uint16_t width;          // Client reference width (stream width), LE
+    uint16_t height;         // Client reference height (stream height), LE
+    uint32_t seq;            // Monotonic sequence number, little-endian
+} SS_CURSOR_POS_SYNC_PACKET, *PSS_CURSOR_POS_SYNC_PACKET;
+
 // Unreliable input: sequenced gamepad state (full state, latest-wins)
 #define SS_MULTI_CONTROLLER_MAGIC 0x55000012
 typedef struct _SS_MULTI_CONTROLLER_PACKET {

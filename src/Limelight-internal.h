@@ -97,6 +97,10 @@ extern uint32_t EncryptionFeaturesEnabled;
 // SS_FF_CLIPBOARD is defined in Limelight.h (public, needed by app layer)
 #define SS_FF_UNRELIABLE_INPUT 0x10 // Server supports unreliable sequenced input for motion
 
+// Client-side cursor rendering protocol state (Sunshine x-ss-cursor extension)
+extern bool CursorSupported;   // Server advertised x-ss-cursor:1 in DESCRIBE SDP
+extern bool CursorNegotiated;  // Both sides agreed during ANNOUNCE (cursor active)
+
 #define UDP_RECV_POLL_TIMEOUT_MS 100
 
 // At this value or above, we will request high quality audio unless CAPABILITY_SLOW_OPUS_DECODER

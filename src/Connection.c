@@ -37,6 +37,8 @@ uint32_t AbrFeedbackInterval;
 uint32_t EncryptionFeaturesSupported;
 uint32_t EncryptionFeaturesRequested;
 uint32_t EncryptionFeaturesEnabled;
+bool CursorSupported;
+bool CursorNegotiated;
 
 // Connection stages
 static const char* stageNames[STAGE_MAX] = {

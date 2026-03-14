@@ -309,6 +309,17 @@ static PSDP_OPTION getAttributesList(char*urlSafeAddr) {
         else {
             err |= addAttributeString(&optionHead, "x-ss-video[0].chromaSamplingType", "0");
         }
+
+        // Opt in to client-side cursor rendering if the server supports it and the client requested it.
+        // The server will suppress cursor blending from video frames once we send this attribute.
+        if (CursorSupported && StreamConfig.enableCursor) {
+            err |= addAttributeString(&optionHead, "x-ss-cursor", "1");
+            CursorNegotiated = true;
+            Limelog("Client-side cursor rendering negotiated\n");
+        }
+        else {
+            CursorNegotiated = false;
+        }
     }
 
     snprintf(payloadStr, sizeof(payloadStr), "%d", StreamConfig.width);

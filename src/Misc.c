@@ -163,3 +163,7 @@ bool LiIsSunshine(void) {
 uint32_t LiGetAbrFeedbackInterval(void) {
     return AbrFeedbackInterval;
 }
+
+bool LiGetCursorNegotiated(void) {
+    return CursorNegotiated;
+}

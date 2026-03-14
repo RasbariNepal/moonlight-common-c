@@ -100,6 +100,12 @@ typedef struct _STREAM_CONFIGURATION {
     // in /launch and /resume requests.
     char remoteInputAesKey[16];
     char remoteInputAesIv[16];
+
+    // If non-zero, opt in to client-side cursor rendering (Sunshine x-ss-cursor extension).
+    // The server will stop blending the cursor into captured video frames and instead
+    // deliver cursor shape and visibility updates over the control channel.
+    // Zero (the default after LiInitializeStreamConfiguration) preserves existing behavior.
+    int enableCursor;
 } STREAM_CONFIGURATION, *PSTREAM_CONFIGURATION;
 
 // Use this function to zero the stream configuration when allocated on the stack or heap
@@ -496,6 +502,26 @@ typedef void(*ConnListenerSetControllerLED)(uint16_t controllerNumber, uint8_t r
 // This callback is invoked when the server sends clipboard data to the client.
 typedef void(*ConnListenerClipboardData)(const char* text, uint32_t length);
 
+// Cursor protocol callbacks (Sunshine x-ss-cursor extension).
+// cursorId is a session-scoped uint8_t identifier (1..255, never 0).
+// Cursor type constants for ConnListenerCursorImage:
+#define CURSOR_TYPE_COLOR        1  // BGRA32: width*height*4 bytes (DXGI pitch-aligned rows)
+#define CURSOR_TYPE_MONOCHROME   2  // 1-bpp AND+XOR bitmask (DXGI DWORD-aligned rows, stacked)
+#define CURSOR_TYPE_MASKED_COLOR 4  // BGRA32: alpha 0xFF=XOR-blend, 0x00=opaque draw
+
+// Called when a new cursor shape arrives. data/dataLen are valid only for the duration
+// of the call; the implementation MUST copy any data it needs.
+typedef void(*ConnListenerCursorImage)(
+    uint8_t cursorId, uint8_t width, uint8_t height,
+    uint8_t hotX, uint8_t hotY, uint8_t cursorType,
+    const uint8_t* data, uint16_t dataLen);
+
+// Called when cursor visibility changes or the active cursor ID changes.
+typedef void(*ConnListenerCursorState)(bool visible, uint8_t activeCursorId);
+
+// Called when switching to a previously-received cursor shape (cache hit).
+typedef void(*ConnListenerCursorRef)(uint8_t cursorId);
+
 typedef struct _CONNECTION_LISTENER_CALLBACKS {
     ConnListenerStageStarting stageStarting;
     ConnListenerStageComplete stageComplete;
@@ -511,6 +537,9 @@ typedef struct _CONNECTION_LISTENER_CALLBACKS {
     ConnListenerSetControllerLED setControllerLED;
     ConnListenerSetAdaptiveTriggers setAdaptiveTriggers;
     ConnListenerClipboardData clipboardData;
+    ConnListenerCursorImage cursorImage;
+    ConnListenerCursorState cursorState;
+    ConnListenerCursorRef   cursorRef;
 } CONNECTION_LISTENER_CALLBACKS, *PCONNECTION_LISTENER_CALLBACKS;
 
 // Use this function to zero the connection callbacks when allocated on the stack or heap
@@ -1032,6 +1061,10 @@ bool LiIsSunshine(void);
 // Returns the server-configured ABR feedback interval (frames per feedback).
 // Defaults to 3 if the server doesn't provide one.
 uint32_t LiGetAbrFeedbackInterval(void);
+
+// Returns true if client-side cursor rendering was negotiated with the server
+// (both sides agreed on x-ss-cursor:1 during RTSP handshake).
+bool LiGetCursorNegotiated(void);
 
 // Send extended IDX_LOSS_STATS with ABR data appended after the legacy 32-byte payload.
 // payload must contain the full packet (32 legacy + ABR extension).

@@ -1135,6 +1135,16 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
         }
         EncryptionFeaturesEnabled = 0;
 
+        // Look for Sunshine client-side cursor rendering support
+        {
+            unsigned int cursorVal = 0;
+            CursorSupported = IS_SUNSHINE() &&
+                parseSdpAttributeToUInt(response.payload, "x-ss-cursor", &cursorVal) && cursorVal != 0;
+            if (CursorSupported) {
+                Limelog("Server supports client-side cursor rendering\n");
+            }
+        }
+
         // Parse the Opus surround parameters out of the RTSP DESCRIBE response.
         ret = parseOpusConfigurations(&response);
         if (ret != 0) {

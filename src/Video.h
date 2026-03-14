@@ -57,6 +57,13 @@ typedef struct _SS_PING {
 #define SS_FRAME_FEC_PTYPE 0x5502
 #define SS_CLIENT_TELEMETRY_PTYPE 0x5510
 #define SS_CLIPBOARD_PTYPE 0x5504
+
+// Cursor protocol packet types (server → client direction, Sunshine x-ss-cursor extension).
+// SS_CURSOR_IMAGE_PTYPE (0x5510) shares a value with SS_CLIENT_TELEMETRY_PTYPE (client→server);
+// they are two different directions on the same ENet channel and are never confused.
+#define SS_CURSOR_IMAGE_PTYPE   0x5510  // server→client: new cursor shape + pixel data
+#define SS_CURSOR_STATE_PTYPE   0x5511  // server→client: show/hide transition
+#define SS_CURSOR_REF_PTYPE     0x5514  // server→client: switch to cached cursor shape
 typedef struct _SS_FRAME_FEC_STATUS {
     uint32_t frameIndex;
     uint16_t highestReceivedSequenceNumber;

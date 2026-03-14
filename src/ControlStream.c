@@ -1323,6 +1323,50 @@ static void controlReceiveThreadFunc(void* context) {
                 }
                 free(ctlHdr);
             }
+            else if (IS_SUNSHINE() && CursorNegotiated && ctlHdr->type == SS_CURSOR_IMAGE_PTYPE) {
+                // CURSOR_IMAGE: cursor_image_t (8 bytes) + pixel data
+                // cursor_image_t layout: cursor_id(u8), width(u8), height(u8),
+                //   hot_x(u8), hot_y(u8), cursor_type(u8), data_len(u16 LE)
+                const int hdrSize = (int)(sizeof(*ctlHdr) + 8);
+                if (packetLength >= hdrSize) {
+                    const uint8_t* p = (const uint8_t*)(ctlHdr + 1);
+                    uint8_t  cursorId   = p[0];
+                    uint8_t  width      = p[1];
+                    uint8_t  height     = p[2];
+                    uint8_t  hotX       = p[3];
+                    uint8_t  hotY       = p[4];
+                    uint8_t  cursorType = p[5];
+                    uint16_t dataLen    = (uint16_t)(p[6] | ((uint16_t)p[7] << 8));
+
+                    if (cursorId != 0 && width != 0 && height != 0 &&
+                            packetLength >= hdrSize + (int)dataLen) {
+                        ListenerCallbacks.cursorImage(cursorId, width, height, hotX, hotY,
+                                                      cursorType, p + 8, dataLen);
+                    }
+                    else {
+                        Limelog("Cursor image: invalid fields (id=%u w=%u h=%u dataLen=%u pktLen=%d)\n",
+                                cursorId, width, height, dataLen, packetLength);
+                    }
+                }
+            }
+            else if (IS_SUNSHINE() && CursorNegotiated && ctlHdr->type == SS_CURSOR_STATE_PTYPE) {
+                // CURSOR_STATE: cursor_state_t (2 bytes): visible(u8), cursor_id(u8)
+                if (packetLength >= (int)(sizeof(*ctlHdr) + 2)) {
+                    const uint8_t* p = (const uint8_t*)(ctlHdr + 1);
+                    bool    visible  = p[0] != 0;
+                    uint8_t cursorId = p[1];
+                    ListenerCallbacks.cursorState(visible, cursorId);
+                }
+            }
+            else if (IS_SUNSHINE() && CursorNegotiated && ctlHdr->type == SS_CURSOR_REF_PTYPE) {
+                // CURSOR_REF: cursor_ref_t (1 byte): cursor_id(u8)
+                if (packetLength >= (int)(sizeof(*ctlHdr) + 1)) {
+                    uint8_t cursorId = *(const uint8_t*)(ctlHdr + 1);
+                    if (cursorId != 0) {
+                        ListenerCallbacks.cursorRef(cursorId);
+                    }
+                }
+            }
             else if (ctlHdr->type == packetTypes[IDX_TERMINATION]) {
                 BYTE_BUFFER bb;
 

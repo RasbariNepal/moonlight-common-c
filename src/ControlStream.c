@@ -1321,7 +1321,6 @@ static void controlReceiveThreadFunc(void* context) {
                         ListenerCallbacks.clipboardData(payload + 6, textLen);
                     }
                 }
-                free(ctlHdr);
             }
             else if (IS_SUNSHINE() && CursorNegotiated && ctlHdr->type == SS_CURSOR_IMAGE_PTYPE) {
                 // CURSOR_IMAGE: cursor_image_t (8 bytes) + pixel data
@@ -1633,6 +1632,27 @@ int LiSendLossStatsWithAbr(const void* payload, int length) {
     }
     return sendMessageEnet(packetTypes[IDX_LOSS_STATS], (short)length, payload,
                            CTRL_CHANNEL_GENERIC, ENET_PACKET_FLAG_UNSEQUENCED, false) ? 0 : -1;
+}
+
+// Send cursor position sync to server for drift correction in relative mouse mode.
+// Builds a SS_CURSOR_POS_SYNC_PACKET and sends it unreliable on the input channel.
+int LiSendCursorPosSync(uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint32_t seqNum) {
+    SS_CURSOR_POS_SYNC_PACKET packet;
+
+    if (peer == NULL || !CursorNegotiated) {
+        return -1;
+    }
+
+    packet.header.size = BE32(sizeof(packet) - sizeof(uint32_t));
+    packet.header.magic = LE32(SS_CURSOR_POS_SYNC_MAGIC);
+    packet.x = LE16(x);
+    packet.y = LE16(y);
+    packet.width = LE16(width);
+    packet.height = LE16(height);
+    packet.seq = LE32(seqNum);
+
+    return sendInputPacketOnControlStream((unsigned char*)&packet, sizeof(packet),
+                                          CTRL_CHANNEL_MOUSE, 0, false);
 }
 
 // Send a telemetry batch packet. Uses dynamic allocation for the plaintext

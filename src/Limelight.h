@@ -1066,6 +1066,11 @@ uint32_t LiGetAbrFeedbackInterval(void);
 // (both sides agreed on x-ss-cursor:1 during RTSP handshake).
 bool LiGetCursorNegotiated(void);
 
+// Send cursor position sync to server for drift correction in relative mouse mode.
+// Coordinates are in stream-space. Fire-and-forget (unreliable, dropped if congested).
+// Only call when LiGetCursorNegotiated() is true.
+int LiSendCursorPosSync(uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint32_t seqNum);
+
 // Send extended IDX_LOSS_STATS with ABR data appended after the legacy 32-byte payload.
 // payload must contain the full packet (32 legacy + ABR extension).
 int LiSendLossStatsWithAbr(const void* payload, int length);

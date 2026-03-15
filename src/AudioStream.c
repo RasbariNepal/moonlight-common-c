@@ -25,6 +25,12 @@ static uint8_t opusHeaderByte;
 
 #define MAX_PACKET_SIZE 1400
 
+// Explicit receive buffer for the audio socket. The OS default (often 8-16KB)
+// can be too small to absorb scheduling jitter, causing packet drops.
+// 64KB holds ~45 audio packets at MAX_PACKET_SIZE, enough to ride out
+// a 50ms scheduling stall at 5ms packet intervals.
+#define AUDIO_RECV_BUFFER_SIZE 65536
+
 typedef struct _QUEUE_AUDIO_PACKET_HEADER {
     LINKED_BLOCKING_QUEUE_ENTRY lentry;
     int size;
@@ -93,7 +99,7 @@ int notifyAudioPortNegotiationComplete(void) {
 
     // For GFE 3.22 compatibility, we must start the audio ping thread before the RTSP handshake.
     // It will not reply to our RTSP PLAY request until the audio ping has been received.
-    rtpSocket = bindUdpSocket(RemoteAddr.ss_family, &LocalAddr, AddrLen, 0, SOCK_QOS_TYPE_AUDIO);
+    rtpSocket = bindUdpSocket(RemoteAddr.ss_family, &LocalAddr, AddrLen, AUDIO_RECV_BUFFER_SIZE, SOCK_QOS_TYPE_AUDIO);
     if (rtpSocket == INVALID_SOCKET) {
         return LastSocketFail();
     }

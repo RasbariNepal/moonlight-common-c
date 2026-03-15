@@ -35,6 +35,13 @@ DWORD (WINAPI *pfnWlanSetInterface)(HANDLE hClientHandle, CONST GUID *pInterface
 
 #endif
 
+#if defined(LC_DARWIN)
+#include <ifaddrs.h>
+#include <net/if.h>
+#include <net/if_media.h>
+#include <sys/ioctl.h>
+#endif
+
 #ifdef __3DS__
 in_port_t n3ds_udp_port = 47998;
 static const int n3ds_max_buf_size = 0x20000;
@@ -973,7 +980,43 @@ void enterLowLatencyMode(void) {
     }
 
     pfnWlanFreeMemory(wlanInterfaceList);
-#else
+#elif defined(LC_DARWIN)
+    // Detect active WiFi interfaces on macOS for diagnostics and future
+    // network-type-aware optimizations (e.g., adaptive jitter buffer, pacing hints).
+    {
+        struct ifaddrs *ifaddr, *ifa;
+        int sock;
+        bool wifiDetected = false;
+
+        if (getifaddrs(&ifaddr) == 0) {
+            sock = socket(AF_INET, SOCK_DGRAM, 0);
+            if (sock >= 0) {
+                for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+                    if (ifa->ifa_addr == NULL) continue;
+                    if (!(ifa->ifa_flags & IFF_UP) || !(ifa->ifa_flags & IFF_RUNNING)) continue;
+
+                    struct ifmediareq ifmr;
+                    memset(&ifmr, 0, sizeof(ifmr));
+                    strlcpy(ifmr.ifm_name, ifa->ifa_name, sizeof(ifmr.ifm_name));
+
+                    if (ioctl(sock, SIOCGIFMEDIA, &ifmr) == 0) {
+                        if (IFM_TYPE(ifmr.ifm_current) == IFM_IEEE80211) {
+                            Limelog("WiFi interface detected: %s (media 0x%x)\n",
+                                    ifa->ifa_name, ifmr.ifm_current);
+                            wifiDetected = true;
+                            break;
+                        }
+                    }
+                }
+                close(sock);
+            }
+            freeifaddrs(ifaddr);
+        }
+
+        if (!wifiDetected) {
+            Limelog("No active WiFi interface detected (wired connection)\n");
+        }
+    }
 #endif
 }
 

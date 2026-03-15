@@ -105,6 +105,7 @@ static uint32_t lastSeenFrame;
 static bool stopping;
 static bool disconnectPending;
 static bool encryptedControlStream;
+static bool suppressLegacyLossStats;
 static bool hdrEnabled;
 static SS_HDR_METADATA hdrMetadata;
 
@@ -305,6 +306,7 @@ static bool supportsIdrFrameRequest;
 // Initializes the control stream
 int initializeControlStream(void) {
     stopping = false;
+    suppressLegacyLossStats = false;
     streamStatsInitialize();
     PltCreateEvent(&idrFrameRequiredEvent);
     LbqInitializeLinkedBlockingQueue(&referenceFrameControlQueue, 20);
@@ -1490,19 +1492,21 @@ static void lossStatsThreadFunc(void* context) {
                     free(queuedFrameStatus);
                 }
 
+                // Always keep stream stats updated (used by the on-screen overlay)
+                {
+                    uint32_t rttMs = 0, rttVarianceMs = 0;
+                    LiGetEstimatedRttInfo(&rttMs, &rttVarianceMs);
+                    streamStatsComputeInterval(rttMs, rttVarianceMs, SS_LOSS_STATS_INTERVAL_MS);
+                }
+
                 // Send extended loss stats to Sunshine (70-byte IDX_LOSS_STATS).
-                // Bytes 0–31 are byte-for-byte identical to the legacy format so existing
-                // parsers reading stats[0], stats[1], stats[3] are unaffected.
-                // Bytes 32–67 carry the full stream stat snapshot.
-                // Bytes 68–69 carry recv_to_feedback_ms for frame echo RTT compensation.
+                // Skip if the app-layer telemetry V2 sender is handling ABR feedback,
+                // because both use IDX_LOSS_STATS and the server can't distinguish them,
+                // causing interleaved 0-valued records in telemetry.
+                if (!suppressLegacyLossStats)
                 {
                     char lossStatsPayload[70];
                     BYTE_BUFFER lsBuf;
-
-                    uint32_t rttMs = 0, rttVarianceMs = 0;
-                    LiGetEstimatedRttInfo(&rttMs, &rttVarianceMs);
-
-                    streamStatsComputeInterval(rttMs, rttVarianceMs, SS_LOSS_STATS_INTERVAL_MS);
 
                     STREAM_STAT_SNAPSHOT snap = {0};
                     streamStatsGetSnapshot(&snap);
@@ -1632,6 +1636,13 @@ int LiSendLossStatsWithAbr(const void* payload, int length) {
     }
     return sendMessageEnet(packetTypes[IDX_LOSS_STATS], (short)length, payload,
                            CTRL_CHANNEL_GENERIC, ENET_PACKET_FLAG_UNSEQUENCED, false) ? 0 : -1;
+}
+
+// Suppress the legacy 70-byte IDX_LOSS_STATS packet from the lossStatsThread.
+// Call this when the app-layer telemetry V2 sender is active, since it sends
+// its own IDX_LOSS_STATS with ABR extension and the two would conflict.
+void LiSuppressLegacyLossStats(void) {
+    suppressLegacyLossStats = true;
 }
 
 // Send cursor position sync to server for drift correction in relative mouse mode.

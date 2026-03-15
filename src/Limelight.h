@@ -1075,6 +1075,11 @@ int LiSendCursorPosSync(uint16_t x, uint16_t y, uint16_t width, uint16_t height,
 // payload must contain the full packet (32 legacy + ABR extension).
 int LiSendLossStatsWithAbr(const void* payload, int length);
 
+// Suppress the legacy 70-byte IDX_LOSS_STATS sent by the lossStatsThread.
+// Call when the app-layer telemetry V2 sender is active to prevent duplicate
+// IDX_LOSS_STATS packets (one with ABR extension, one without) from interleaving.
+void LiSuppressLegacyLossStats(void);
+
 // Send a telemetry batch packet (SS_CLIENT_TELEMETRY_PTYPE).
 // payload contains batch header + wire records.
 int LiSendTelemetryBatch(const void* payload, int length);
